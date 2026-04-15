@@ -1,0 +1,137 @@
+{
+  "theme_and_archetype": {
+    "primary": "Archetype 4 (Swiss & High-Contrast)",
+    "sub_style": "Tech Command Center / Logistics Operator",
+    "theme": "Dark and Light Mode (Toggle functionality required)",
+    "rationale": "For an autonomous dark store operations dashboard, the UI needs to convey urgency, data density, and technical precision. The 'Control Room' grid with sharp edges and monospace data points perfectly fits this high-contrast, functional archetype."
+  },
+  "typography": {
+    "font_family": {
+      "headings": "'Chivo', sans-serif",
+      "body": "'IBM Plex Sans', sans-serif",
+      "data_logs": "'JetBrains Mono', monospace"
+    },
+    "scales": {
+      "h1": "text-3xl sm:text-4xl tracking-tight font-black",
+      "h2": "text-xl sm:text-2xl tracking-tight font-bold",
+      "h3": "text-lg tracking-tight font-semibold",
+      "metric_value": "text-4xl sm:text-5xl font-bold font-mono tracking-tighter",
+      "body": "text-sm sm:text-base",
+      "log_text": "text-xs font-mono tracking-tight leading-relaxed",
+      "overline": "text-[10px] uppercase tracking-[0.2em] font-bold"
+    },
+    "rules": {
+      "headings": "Never use Inter for headings. Keep them sharp and slightly condensed.",
+      "metrics": "Always use monospace (JetBrains Mono) for numbers to ensure tabular alignment and technical feel."
+    }
+  },
+  "colors": {
+    "light_mode": {
+      "background": "bg-slate-50",
+      "surface": "bg-white",
+      "surface_alt": "bg-slate-100",
+      "border": "border-slate-200",
+      "text_primary": "text-slate-900",
+      "text_secondary": "text-slate-500",
+      "text_muted": "text-slate-400"
+    },
+    "dark_mode": {
+      "background": "bg-zinc-950",
+      "surface": "bg-zinc-900/80",
+      "surface_alt": "bg-zinc-800",
+      "border": "border-zinc-800",
+      "text_primary": "text-zinc-50",
+      "text_secondary": "text-zinc-400",
+      "text_muted": "text-zinc-600"
+    },
+    "accents": {
+      "primary": "bg-blue-600 dark:bg-blue-500 (Used for active buttons/toggles)",
+      "success": "bg-emerald-500 text-emerald-950 dark:text-emerald-50 (Used for normal operations, high stock)",
+      "warning": "bg-amber-400 text-amber-950 dark:text-amber-50 (Used for weather warnings, low stock)",
+      "danger": "bg-red-500 text-red-950 dark:text-red-50 (Used for Cascade Alerts, Orchestrator conflicts)",
+      "terminal_bg": "bg-zinc-950 text-emerald-400 (Log container always retains a dark tech feel)"
+    }
+  },
+  "spacing_and_layout": {
+    "grid_system": "Mode B: 'Control Room' Grid. Dense and compact.",
+    "gap": "gap-4 md:gap-6",
+    "padding": {
+      "page": "p-4 md:p-8",
+      "card": "p-4 md:p-6"
+    },
+    "surface_style": "Grid Borders Micro-theme. Sharp edges (rounded-none or max rounded-sm). Use borders (border border-border) to define the skeleton. 1px solid strokes, no soft shadows.",
+    "structure": [
+      "Header: Flex row, fixed top, backdrop-blur with bottom border.",
+      "Banner: Full width under header for CASCADE ALERT.",
+      "Stats Bar: 4 columns across top (grid-cols-2 lg:grid-cols-4).",
+      "Main Dashboard: 3 columns (grid-cols-1 lg:grid-cols-3 or lg:grid-cols-12).",
+      "  - Col 1 (span-3): Weather/Demand + Orchestrator Conflicts",
+      "  - Col 2 (span-5): Dark Store Inventory Cards",
+      "  - Col 3 (span-4): Delivery Agents + Agent Decision Log",
+      "Footer: Centered, dense padding (py-8)."
+    ]
+  },
+  "components": {
+    "header": {
+      "description": "Sticky top bar with app title (SyncTech FlowOps), Demo Mode toggle, Sound toggle, and Light/Dark mode toggle button.",
+      "rules": "Must have bottom border. Use standard icons for toggles."
+    },
+    "cascade_alert_banner": {
+      "description": "High-visibility marquee banner for critical alerts.",
+      "classes": "bg-red-500 text-white font-mono uppercase tracking-widest text-sm py-1 overflow-hidden"
+    },
+    "stats_bar": {
+      "description": "4 metrics cards (e.g., Active Orders, Avg Delivery Time, Fleet Status, System Load).",
+      "rules": "Big monospace numbers. Tiny uppercase overlines. Subtle bottom/right borders to separate them."
+    },
+    "weather_demand_panel": {
+      "description": "Shows current weather impact on demand.",
+      "rules": "Use an icon (rain/storm) with warning colors if impact is high."
+    },
+    "orchestrator_conflicts": {
+      "description": "List of unresolved automated decisions.",
+      "rules": "Use red/amber left-borders on list items to indicate severity. Hover states must subtly highlight the row."
+    },
+    "dark_store_inventory": {
+      "description": "3 cards showing stock levels per zone.",
+      "rules": "Use custom progress bars (h-2). Color code the fill: Emerald (>50%), Amber (20-50%), Red (<20%)."
+    },
+    "delivery_agents": {
+      "description": "List of 5 agents with status badges.",
+      "rules": "Compact rows. Statuses like 'EN ROUTE' or 'WAITING' in tiny bold badges."
+    },
+    "agent_decision_log": {
+      "description": "Real-time scrolling terminal output.",
+      "rules": "Must look like a CLI. Fixed height (h-64), overflow-y-auto, font-mono. Dark background even in light mode for the 'hacker/terminal' effect. Add a blinking cursor effect or pulsing 'LIVE' badge."
+    },
+    "cascade_modal": {
+      "description": "Overlay for major system failures.",
+      "rules": "Glassmorphism backdrop (backdrop-blur-md bg-black/60). Modal itself is solid border-red-500, sharp corners, urgent typography."
+    },
+    "toggles": {
+      "description": "Sound, Demo, and Theme toggles.",
+      "rules": "Use Shadcn Switch or distinct toggle buttons. The Theme toggle should be prominent (Sun/Moon icon)."
+    }
+  },
+  "interactions_and_motion": {
+    "hover_states": "All buttons and list items must have distinct hover states (e.g., bg-zinc-800/50 in dark mode).",
+    "live_indicators": "Use 'animate-pulse' on a small colored circle (red or green) in the header or log panel to indicate 'Live Data'.",
+    "transitions": "Use 'transition-colors duration-300' on the body and major structural elements to ensure the light/dark mode switch is smooth."
+  },
+  "media": {
+    "icons": "lucide-react",
+    "image_urls": {}
+  },
+  "testing": {
+    "rules": "Add `data-testid` to all interactive elements (e.g., data-testid='theme-toggle-button', data-testid='demo-mode-toggle', data-testid='cascade-alert-banner')."
+  },
+  "instructions_to_main_agent": [
+    "Install required fonts: Chivo, IBM Plex Sans, JetBrains Mono.",
+    "Implement the Next-Themes or equivalent context provider to manage Light/Dark mode.",
+    "Ensure all Shadcn components (if used) are stripped of rounded corners (rounded-none or max rounded-sm) to match the 'Swiss Brutalist' Command Center aesthetic.",
+    "Do NOT use `Inter` font anywhere. Strictly map standard sans to IBM Plex Sans and headers to Chivo.",
+    "Ensure the layout breaks down correctly on mobile (grid-cols-1). The stats bar should be 2x2 grid on mobile.",
+    "Mock the real-time scrolling effect in the Agent Decision Log using a React `useEffect` interval that pushes dummy log entries.",
+    "For the Cascade Alert Modal, create a 'Trigger Alert' button inside Demo Mode to test the modal."
+  ]
+}
