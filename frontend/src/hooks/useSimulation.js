@@ -57,7 +57,62 @@ const CURRENT_ACTIONS = [
   'Returning to store',
 ];
 
+const WEATHER_CONDITIONS = [
+  { condition: 'sunny', temp: 32, description: 'Clear skies, normal traffic flow' },
+  { condition: 'rainy', temp: 24, description: 'Heavy rainfall — road delays expected' },
+  { condition: 'stormy', temp: 21, description: 'Thunderstorm warning — high delivery risk' },
+  { condition: 'windy', temp: 28, description: 'Strong winds — minor route adjustments' },
+  { condition: 'heatwave', temp: 42, description: 'Extreme heat — beverage demand surge' },
+];
+
+const LOCAL_EVENTS = [
+  { event: 'IPL Match — Zone A', eventModifier: 30 },
+  { event: 'Diwali Festival Sale', eventModifier: 45 },
+  { event: 'College Fest — Zone B', eventModifier: 20 },
+  { event: 'Weekend Rush Hour', eventModifier: 15 },
+  null, null,
+];
+
+const CONFLICT_TEMPLATES = [
+  {
+    agentA: 'DEMAND', agentB: 'ROUTING',
+    description: 'Stock transfer conflicts with active delivery routes',
+    actionA: 'transfer stock from Store Beta',
+    actionB: 'use Store Beta for active deliveries',
+    resolution: 'Redirecting transfer to Store Gamma surplus while preserving Beta fulfillment pipeline',
+  },
+  {
+    agentA: 'ROUTING', agentB: 'RECOVERY',
+    description: 'Agent reassignment conflicts with recovery protocol',
+    actionA: 'reassign idle agent to new order',
+    actionB: 'hold idle agent for cascade recovery',
+    resolution: 'Prioritizing recovery — holding agent for 60s then releasing to routing pool',
+  },
+  {
+    agentA: 'DEMAND', agentB: 'INVENTORY',
+    description: 'Demand restock conflicts with reorder schedule',
+    actionA: 'pull emergency stock from warehouse',
+    actionB: 'scheduled reorder already in transit',
+    resolution: 'Canceling emergency pull — scheduled reorder ETA within threshold. Adjusting demand predictions.',
+  },
+  {
+    agentA: 'INVENTORY', agentB: 'ROUTING',
+    description: 'Store restocking conflicts with pickup scheduling',
+    actionA: 'initiate Store Alpha receiving dock restock',
+    actionB: 'dispatch agents for pickup from Store Alpha',
+    resolution: 'Staggering operations — routing completes pickups first, then inventory dock opens for restock',
+  },
+  {
+    agentA: 'RECOVERY', agentB: 'DEMAND',
+    description: 'Recovery reroute conflicts with demand prediction',
+    actionA: 'reroute orders away from Zone C',
+    actionB: 'increase Zone C inventory for predicted surge',
+    resolution: 'Partial reroute — redirecting 60% of orders while maintaining Zone C capacity for incoming surge',
+  },
+];
+
 let logCounter = 0;
+let conflictCounter = 0;
 
 function createLog(type, message, priority, reasoning) {
   return {
@@ -94,6 +149,14 @@ export function useSimulation() {
   const [successRate, setSuccessRate] = useState(93);
   const [cascadeAlert, setCascadeAlert] = useState({ active: false, failCount: 0 });
   const [cascadeEvent, setCascadeEvent] = useState(null);
+  const [weather, setWeather] = useState({
+    ...WEATHER_CONDITIONS[0],
+    event: null,
+    eventModifier: 0,
+    zoneDemand: { a: 55, b: 42, c: 38 },
+    prediction: null,
+  });
+  const [conflicts, setConflicts] = useState([]);
 
   const agentsRef = useRef(agents);
   const ordersRef = useRef(orders);
@@ -109,7 +172,6 @@ export function useSimulation() {
     setLogs(prev => [log, ...prev].slice(0, 60));
   }, []);
 
-  // Queue LLM calls to avoid flooding
   const queueLlmReasoning = useCallback((agentType, context, callback) => {
     llmQueueRef.current = llmQueueRef.current.then(async () => {
       const reasoning = await fetchAgentReasoning(agentType, context);
@@ -120,7 +182,6 @@ export function useSimulation() {
   const checkCascade = useCallback((orderId, zone) => {
     const now = Date.now();
     recentDelaysRef.current.push({ orderId, zone, time: now });
-    // Keep only delays from last 10 seconds
     recentDelaysRef.current = recentDelaysRef.current.filter(d => now - d.time < 10000);
 
     if (recentDelaysRef.current.length >= 2) {
@@ -128,8 +189,6 @@ export function useSimulation() {
       const affectedOrders = recentDelaysRef.current.map(d => d.orderId).filter(id => id !== orderId);
 
       setCascadeAlert({ active: true, failCount });
-
-      // Trigger cascade modal
       setCascadeEvent({
         triggerOrder: orderId,
         affectedOrders: affectedOrders.slice(0, 3),
@@ -137,7 +196,6 @@ export function useSimulation() {
         context: `${failCount} order delays within 10s window in ${zone}`,
       });
 
-      // Add recovery log with LLM reasoning
       const recoveryMsg = `RECOVERY AGENT: Cascade detected — ${orderId} delay rippling to ${affectedOrders.length} orders in ${zone}. Initiating auto-recovery.`;
       const log = createLog('ALERT', recoveryMsg, 'critical');
       addLog(log);
@@ -149,7 +207,6 @@ export function useSimulation() {
         }
       );
 
-      // Auto-resolve after 8 seconds
       setTimeout(() => {
         setCascadeAlert({ active: false, failCount: 0 });
         addLog(createLog('ROUTING', `RECOVERY AGENT: Cascade resolved — all ${failCount} affected orders rerouted successfully`, 'high'));
@@ -163,8 +220,7 @@ export function useSimulation() {
     const idleAgents = currentAgents.filter(a => a.status === 'idle');
 
     if (idleAgents.length === 0) {
-      const log = createLog('ALERT', `No idle agents — Order ${order.id} queued for ${order.zone}`, 'high');
-      addLog(log);
+      addLog(createLog('ALERT', `No idle agents — Order ${order.id} queued for ${order.zone}`, 'high'));
       return;
     }
 
@@ -204,7 +260,6 @@ export function useSimulation() {
       const log = createLog('ROUTING', routingMsg, 'low');
       addLog(log);
 
-      // Periodic LLM reasoning for regular dispatches to show agents thinking
       if (Math.random() < 0.25) {
         queueLlmReasoning('routing',
           `Dispatching ${chosen.name} from ${storeInZone.name} to ${order.zone} for order ${order.id} (${order.product} x${order.quantity}). Zone load normal.`,
@@ -266,7 +321,7 @@ export function useSimulation() {
     return () => clearInterval(interval);
   }, [assignOrderToAgent]);
 
-  // Agent events loop (stuck, recovery, demand spikes, inventory)
+  // Agent events loop
   useEffect(() => {
     const interval = setInterval(() => {
       const currentAgents = agentsRef.current;
@@ -385,9 +440,133 @@ export function useSimulation() {
     return () => clearInterval(interval);
   }, [addLog, queueLlmReasoning]);
 
+  // Weather cycle — changes every 30s
+  useEffect(() => {
+    // Initial weather prediction
+    const fetchInitialPrediction = async () => {
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/weather-prediction`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ condition: 'sunny', event: '', zone_demand: { a: 55, b: 42, c: 38 } }),
+        });
+        const data = await res.json();
+        setWeather(prev => ({ ...prev, prediction: data.prediction }));
+      } catch { /* ignore */ }
+    };
+    fetchInitialPrediction();
+
+    const interval = setInterval(() => {
+      const newCondition = pickRandom(WEATHER_CONDITIONS);
+      const eventRoll = pickRandom(LOCAL_EVENTS);
+      const newZoneDemand = {
+        a: randomBetween(35, 75),
+        b: randomBetween(30, 65),
+        c: randomBetween(25, 60),
+      };
+
+      setWeather(prev => ({
+        ...newCondition,
+        event: eventRoll?.event || null,
+        eventModifier: eventRoll?.eventModifier || 0,
+        zoneDemand: newZoneDemand,
+        prediction: prev.prediction,
+      }));
+
+      // Fetch new AI prediction
+      const fetchPrediction = async () => {
+        try {
+          const res = await fetch(`${BACKEND_URL}/api/weather-prediction`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              condition: newCondition.condition,
+              event: eventRoll?.event || '',
+              zone_demand: newZoneDemand,
+            }),
+          });
+          const data = await res.json();
+          setWeather(prev => ({ ...prev, prediction: data.prediction }));
+        } catch { /* ignore */ }
+      };
+      fetchPrediction();
+
+      // Log weather-driven demand change
+      addLog(createLog('DEMAND',
+        `DEMAND AGENT: Weather shift — ${newCondition.condition}${eventRoll ? ` + ${eventRoll.event}` : ''}. Adjusting zone predictions.`,
+        'medium'
+      ));
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, [addLog]);
+
+  // Orchestrator conflict generation — every 15-20s
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (Math.random() < 0.6) return; // 40% chance to generate a conflict
+
+      const template = pickRandom(CONFLICT_TEMPLATES);
+      const conflictId = `conflict-${++conflictCounter}-${Date.now()}`;
+
+      const newConflict = {
+        id: conflictId,
+        ...template,
+        timestamp: Date.now(),
+        resolved: false,
+        reasoning: null,
+      };
+
+      setConflicts(prev => [newConflict, ...prev].slice(0, 8));
+
+      addLog(createLog('ALERT',
+        `ORCHESTRATOR: Conflict — ${template.agentA} vs ${template.agentB}: ${template.description}`,
+        'high'
+      ));
+
+      // Resolve after 3-5 seconds with LLM reasoning
+      const resolveDelay = randomBetween(3000, 5000);
+      setTimeout(async () => {
+        // Fetch orchestrator reasoning
+        try {
+          const res = await fetch(`${BACKEND_URL}/api/orchestrator-reasoning`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              agent_a: template.agentA,
+              agent_b: template.agentB,
+              action_a: template.actionA,
+              action_b: template.actionB,
+              context: template.description,
+            }),
+          });
+          const data = await res.json();
+
+          setConflicts(prev => prev.map(c =>
+            c.id === conflictId
+              ? { ...c, resolved: true, reasoning: data.reasoning }
+              : c
+          ));
+
+          addLog(createLog('ROUTING',
+            `ORCHESTRATOR: Resolved ${template.agentA} vs ${template.agentB} — ${template.resolution}`,
+            'high'
+          ));
+        } catch {
+          setConflicts(prev => prev.map(c =>
+            c.id === conflictId ? { ...c, resolved: true } : c
+          ));
+        }
+      }, resolveDelay);
+    }, 15000);
+
+    return () => clearInterval(interval);
+  }, [addLog]);
+
   return {
     orders, agents, stores, logs,
     totalDelivered, totalDelayed, successRate,
     cascadeAlert, cascadeEvent, setCascadeEvent,
+    weather, conflicts,
   };
 }

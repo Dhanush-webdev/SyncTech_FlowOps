@@ -146,6 +146,65 @@ class SyncTechAPITester:
                 return False
         return success
 
+    def test_orchestrator_reasoning(self):
+        """Test orchestrator reasoning endpoint (NEW FEATURE)"""
+        test_data = {
+            "agent_a": "DEMAND",
+            "agent_b": "ROUTING", 
+            "action_a": "transfer stock from Store Beta",
+            "action_b": "use Store Beta for active deliveries",
+            "context": "Stock transfer conflicts with active delivery routes"
+        }
+        success, response = self.run_test(
+            "Orchestrator Reasoning (NEW)", 
+            "POST", 
+            "orchestrator-reasoning", 
+            200, 
+            test_data
+        )
+        
+        if success and response:
+            # Validate response structure
+            required_fields = ['reasoning', 'agent_a', 'agent_b']
+            if all(field in response for field in required_fields):
+                print(f"   ✅ Valid orchestrator response structure")
+                print(f"   Agent A: {response['agent_a']}")
+                print(f"   Agent B: {response['agent_b']}")
+                print(f"   Reasoning: {response['reasoning'][:100]}...")
+                return True
+            else:
+                print(f"   ❌ Invalid orchestrator response structure")
+                return False
+        return success
+
+    def test_weather_prediction(self):
+        """Test weather prediction endpoint (NEW FEATURE)"""
+        test_data = {
+            "condition": "rainy",
+            "event": "IPL Match — Zone A",
+            "zone_demand": {"a": 55, "b": 42, "c": 38}
+        }
+        success, response = self.run_test(
+            "Weather Prediction (NEW)", 
+            "POST", 
+            "weather-prediction", 
+            200, 
+            test_data
+        )
+        
+        if success and response:
+            # Validate response structure
+            required_fields = ['prediction', 'condition']
+            if all(field in response for field in required_fields):
+                print(f"   ✅ Valid weather prediction response structure")
+                print(f"   Condition: {response['condition']}")
+                print(f"   Prediction: {response['prediction'][:100]}...")
+                return True
+            else:
+                print(f"   ❌ Invalid weather prediction response structure")
+                return False
+        return success
+
     def test_status_endpoints(self):
         """Test status check endpoints"""
         # Test POST status
@@ -177,6 +236,10 @@ def main():
     
     # Test cascade reasoning endpoint
     tester.test_cascade_reasoning()
+    
+    # Test NEW FEATURES - orchestrator and weather prediction endpoints
+    tester.test_orchestrator_reasoning()
+    tester.test_weather_prediction()
     
     # Print final results
     print("\n" + "=" * 60)

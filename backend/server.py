@@ -49,6 +49,18 @@ class CascadeReasoningRequest(BaseModel):
     zone: str
     context: str
 
+class OrchestratorReasoningRequest(BaseModel):
+    agent_a: str
+    agent_b: str
+    action_a: str
+    action_b: str
+    context: str
+
+class WeatherPredictionRequest(BaseModel):
+    condition: str
+    event: str = ""
+    zone_demand: dict = {}
+
 
 AGENT_SYSTEM_PROMPTS = {
     "demand": """You are the DEMAND AGENT in an autonomous quick-commerce dark store system. 
@@ -73,6 +85,21 @@ Do NOT use markdown. Plain text only.""",
 You monitor stock levels across all dark stores and trigger automatic reorders when thresholds are breached.
 Generate a single concise reasoning statement (1-2 sentences max) about your inventory decision. Sound precise and proactive.
 Example tone: "Store Gamma dairy stock at 18% — below critical threshold. Auto-triggering emergency reorder of 40 units. ETA to shelf: 12min."
+Do NOT use markdown. Plain text only.""",
+
+    "orchestrator": """You are the ORCHESTRATOR in an autonomous quick-commerce dark store system.
+You watch all agents (Demand, Routing, Recovery, Inventory) and resolve conflicts when their actions clash.
+You make the system-level decision that optimizes overall performance.
+Generate a concise reasoning statement (2-3 sentences max) explaining how you detected the conflict and what system-level decision you made.
+Sound authoritative and systems-level. Reference the specific agents and their conflicting actions.
+Example tone: "Conflict detected: Demand Agent requesting stock transfer from Store Beta, but Routing Agent has 2 active deliveries sourced from Beta. Resolution: Redirecting transfer to Store Gamma surplus (capacity: 89%) while preserving Beta's active fulfillment pipeline."
+Do NOT use markdown. Plain text only.""",
+
+    "weather_prediction": """You are the DEMAND PREDICTION AI in an autonomous quick-commerce system.
+You analyze weather conditions and local events to predict demand patterns across dark store zones.
+Generate a single concise prediction (1-2 sentences max) about expected demand impact.
+Be specific with numbers and zones. Sound analytical.
+Example tone: "Heavy rain forecasted to increase delivery demand by 35% in Zone A and Zone C within next 2 hours. Recommending preemptive inventory boost in dairy and beverages."
 Do NOT use markdown. Plain text only.""",
 }
 
@@ -144,6 +171,56 @@ async def generate_cascade_reasoning(request: CascadeReasoningRequest):
             "trigger_order": request.trigger_order,
             "affected_orders": request.affected_orders
         }
+
+
+@api_router.post("/orchestrator-reasoning")
+async def generate_orchestrator_reasoning(request: OrchestratorReasoningRequest):
+    try:
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=f"orchestrator-{uuid.uuid4().hex[:8]}",
+            system_message=AGENT_SYSTEM_PROMPTS["orchestrator"]
+        ).with_model("openai", "gpt-4o-mini")
+
+        context = (
+            f"AGENT CONFLICT: {request.agent_a} wants to {request.action_a}. "
+            f"But {request.agent_b} wants to {request.action_b}. "
+            f"Context: {request.context}. "
+            f"How do you resolve this conflict as the system orchestrator?"
+        )
+        user_message = UserMessage(text=context)
+        response = await chat.send_message(user_message)
+        return {"reasoning": response, "agent_a": request.agent_a, "agent_b": request.agent_b}
+    except Exception as e:
+        logger.error(f"Orchestrator reasoning error: {e}")
+        return {
+            "reasoning": f"System-level resolution: Prioritizing {request.agent_a} action while scheduling {request.agent_b} action for next available window.",
+            "agent_a": request.agent_a,
+            "agent_b": request.agent_b,
+        }
+
+
+@api_router.post("/weather-prediction")
+async def generate_weather_prediction(request: WeatherPredictionRequest):
+    try:
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=f"weather-{uuid.uuid4().hex[:8]}",
+            system_message=AGENT_SYSTEM_PROMPTS["weather_prediction"]
+        ).with_model("openai", "gpt-4o-mini")
+
+        context = (
+            f"Current weather: {request.condition}. "
+            f"{'Local event: ' + request.event + '. ' if request.event else ''}"
+            f"Zone demand levels: A={request.zone_demand.get('a', 50)}%, B={request.zone_demand.get('b', 45)}%, C={request.zone_demand.get('c', 40)}%. "
+            f"Predict how this will impact quick-commerce delivery demand in the next 2 hours."
+        )
+        user_message = UserMessage(text=context)
+        response = await chat.send_message(user_message)
+        return {"prediction": response, "condition": request.condition}
+    except Exception as e:
+        logger.error(f"Weather prediction error: {e}")
+        return {"prediction": f"{request.condition.capitalize()} conditions detected. Demand adjustments applied across all zones.", "condition": request.condition}
 
 
 # Include the router in the main app
