@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { generateOrder, randomBetween, pickRandom } from '../utils/generators';
+import { playSFX } from '../utils/sounds';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 
@@ -157,6 +158,7 @@ export function useSimulation() {
     prediction: null,
   });
   const [conflicts, setConflicts] = useState([]);
+  const [demoActive, setDemoActive] = useState(false);
 
   const agentsRef = useRef(agents);
   const ordersRef = useRef(orders);
@@ -179,41 +181,195 @@ export function useSimulation() {
     });
   }, []);
 
+  // --- TRIGGER CASCADE (used by demo mode + normal flow) ---
+  const triggerCascade = useCallback((triggerOrderId, zone, affectedOrderIds) => {
+    const failCount = affectedOrderIds.length + 1;
+    playSFX('cascadeAlert');
+
+    setCascadeAlert({ active: true, failCount });
+    setCascadeEvent({
+      triggerOrder: triggerOrderId,
+      affectedOrders: affectedOrderIds.slice(0, 3),
+      zone,
+      context: `${failCount} order delays within 10s window in ${zone}`,
+    });
+
+    const recoveryMsg = `RECOVERY AGENT: Cascade detected — ${triggerOrderId} delay rippling to ${affectedOrderIds.length} orders in ${zone}. Initiating auto-recovery.`;
+    const log = createLog('ALERT', recoveryMsg, 'critical');
+    addLog(log);
+
+    queueLlmReasoning('recovery',
+      `Cascade failure: ${triggerOrderId} delayed in ${zone}, affecting ${affectedOrderIds.join(', ')}. ${failCount} total failures in 10s.`,
+      (reasoning) => {
+        setLogs(prev => prev.map(l => l.id === log.id ? { ...l, reasoning } : l));
+      }
+    );
+
+    setTimeout(() => {
+      playSFX('cascadeResolved');
+      setCascadeAlert({ active: false, failCount: 0 });
+      addLog(createLog('ROUTING', `RECOVERY AGENT: Cascade resolved — all ${failCount} affected orders rerouted successfully`, 'high'));
+      recentDelaysRef.current = [];
+    }, 8000);
+  }, [addLog, queueLlmReasoning]);
+
+  // --- TRIGGER CONFLICT (used by demo mode + normal flow) ---
+  const triggerConflict = useCallback((template) => {
+    const conflictId = `conflict-${++conflictCounter}-${Date.now()}`;
+    playSFX('conflictDetected');
+
+    const newConflict = {
+      id: conflictId,
+      ...template,
+      timestamp: Date.now(),
+      resolved: false,
+      reasoning: null,
+    };
+
+    setConflicts(prev => [newConflict, ...prev].slice(0, 8));
+    addLog(createLog('ALERT',
+      `ORCHESTRATOR: Conflict — ${template.agentA} vs ${template.agentB}: ${template.description}`,
+      'high'
+    ));
+
+    const resolveDelay = randomBetween(3000, 5000);
+    setTimeout(async () => {
+      try {
+        const res = await fetch(`${BACKEND_URL}/api/orchestrator-reasoning`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agent_a: template.agentA,
+            agent_b: template.agentB,
+            action_a: template.actionA,
+            action_b: template.actionB,
+            context: template.description,
+          }),
+        });
+        const data = await res.json();
+
+        playSFX('conflictResolved');
+        setConflicts(prev => prev.map(c =>
+          c.id === conflictId ? { ...c, resolved: true, reasoning: data.reasoning } : c
+        ));
+        addLog(createLog('ROUTING',
+          `ORCHESTRATOR: Resolved ${template.agentA} vs ${template.agentB} — ${template.resolution}`,
+          'high'
+        ));
+      } catch {
+        setConflicts(prev => prev.map(c =>
+          c.id === conflictId ? { ...c, resolved: true } : c
+        ));
+      }
+    }, resolveDelay);
+  }, [addLog]);
+
   const checkCascade = useCallback((orderId, zone) => {
     const now = Date.now();
     recentDelaysRef.current.push({ orderId, zone, time: now });
     recentDelaysRef.current = recentDelaysRef.current.filter(d => now - d.time < 10000);
 
     if (recentDelaysRef.current.length >= 2) {
-      const failCount = recentDelaysRef.current.length;
       const affectedOrders = recentDelaysRef.current.map(d => d.orderId).filter(id => id !== orderId);
+      triggerCascade(orderId, zone, affectedOrders);
+    }
+  }, [triggerCascade]);
 
-      setCascadeAlert({ active: true, failCount });
-      setCascadeEvent({
-        triggerOrder: orderId,
-        affectedOrders: affectedOrders.slice(0, 3),
-        zone,
-        context: `${failCount} order delays within 10s window in ${zone}`,
-      });
+  // --- DEMO MODE ---
+  const activateDemoMode = useCallback(() => {
+    playSFX('demoMode');
+    setDemoActive(true);
 
-      const recoveryMsg = `RECOVERY AGENT: Cascade detected — ${orderId} delay rippling to ${affectedOrders.length} orders in ${zone}. Initiating auto-recovery.`;
-      const log = createLog('ALERT', recoveryMsg, 'critical');
-      addLog(log);
+    // Step 1: Immediate — weather storm + demand spike
+    const stormWeather = { condition: 'stormy', temp: 21, description: 'Thunderstorm warning — high delivery risk' };
+    const stormEvent = { event: 'IPL Match — Zone A', eventModifier: 30 };
+    setWeather(prev => ({
+      ...stormWeather,
+      ...stormEvent,
+      zoneDemand: { a: 82, b: 65, c: 71 },
+      prediction: prev.prediction,
+    }));
+    addLog(createLog('DEMAND', 'DEMAND AGENT: Weather shift — stormy + IPL Match — Zone A. Adjusting zone predictions.', 'high'));
+    playSFX('demandSpike');
 
-      queueLlmReasoning('recovery',
-        `Cascade failure: ${orderId} delayed in ${zone}, affecting ${affectedOrders.join(', ')}. ${failCount} total failures in 10s.`,
-        (reasoning) => {
-          setLogs(prev => prev.map(l => l.id === log.id ? { ...l, reasoning } : l));
-        }
-      );
+    // Fetch storm prediction
+    fetch(`${BACKEND_URL}/api/weather-prediction`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ condition: 'stormy', event: 'IPL Match — Zone A', zone_demand: { a: 82, b: 65, c: 71 } }),
+    })
+      .then(r => r.json())
+      .then(data => setWeather(prev => ({ ...prev, prediction: data.prediction })))
+      .catch(() => {});
+
+    // Step 2: 2s — Agent stuck
+    setTimeout(() => {
+      const currentAgents = agentsRef.current;
+      const activeAgent = currentAgents.find(a => a.status === 'active');
+      if (activeAgent) {
+        playSFX('agentStuck');
+        setAgents(prev => prev.map(a =>
+          a.id === activeAgent.id ? { ...a, status: 'stuck', stuckSince: Date.now(), currentAction: 'Route blocked — storm flooding' } : a
+        ));
+        const log = createLog('ALERT', `${activeAgent.name} stuck in ${activeAgent.zone} — storm flooding detected. Route blocked.`, 'critical');
+        addLog(log);
+        queueLlmReasoning('routing',
+          `Agent ${activeAgent.name} stuck in ${activeAgent.zone} due to storm flooding. Route completely blocked. No alternate path available.`,
+          (reasoning) => {
+            setLogs(prev => prev.map(l => l.id === log.id ? { ...l, reasoning } : l));
+          }
+        );
+
+        // Recover after 6s
+        setTimeout(() => {
+          setAgents(prev => prev.map(a =>
+            a.id === activeAgent.id ? { ...a, status: 'idle', currentOrderId: undefined, stuckSince: undefined, currentAction: undefined } : a
+          ));
+          addLog(createLog('ROUTING', `${activeAgent.name} route recovered via alternate path — returning to idle pool`, 'medium'));
+        }, 6000);
+      }
+    }, 2000);
+
+    // Step 3: 4s — Orchestrator conflict
+    setTimeout(() => {
+      const template = CONFLICT_TEMPLATES[0]; // DEMAND vs ROUTING — most dramatic
+      triggerConflict(template);
+    }, 4000);
+
+    // Step 4: 6s — Cascade event
+    setTimeout(() => {
+      const ordA = `ORD-DEMO-${Date.now()}`;
+      const ordB = `ORD-DEMO-${Date.now() + 1}`;
+      const ordC = `ORD-DEMO-${Date.now() + 2}`;
+      playSFX('orderDelayed');
+      addLog(createLog('ALERT', `Delay detected on ${ordA} — SLA breach imminent in Zone A`, 'critical'));
 
       setTimeout(() => {
-        setCascadeAlert({ active: false, failCount: 0 });
-        addLog(createLog('ROUTING', `RECOVERY AGENT: Cascade resolved — all ${failCount} affected orders rerouted successfully`, 'high'));
-        recentDelaysRef.current = [];
-      }, 8000);
-    }
-  }, [addLog, queueLlmReasoning]);
+        playSFX('orderDelayed');
+        addLog(createLog('ALERT', `Delay detected on ${ordB} — cascading from ${ordA}`, 'critical'));
+        triggerCascade(ordA, 'Zone A', [ordB, ordC]);
+      }, 1500);
+    }, 6000);
+
+    // Step 5: 10s — Second conflict
+    setTimeout(() => {
+      const template = CONFLICT_TEMPLATES[1]; // ROUTING vs RECOVERY
+      triggerConflict(template);
+    }, 10000);
+
+    // Step 6: 16s — Demo ends, weather normalizes
+    setTimeout(() => {
+      setDemoActive(false);
+      setWeather(prev => ({
+        ...WEATHER_CONDITIONS[0],
+        event: null,
+        eventModifier: 0,
+        zoneDemand: { a: 55, b: 42, c: 38 },
+        prediction: prev.prediction,
+      }));
+      addLog(createLog('DEMAND', 'DEMAND AGENT: Storm clearing — reverting to standard demand models.', 'medium'));
+    }, 16000);
+  }, [addLog, queueLlmReasoning, triggerCascade, triggerConflict]);
 
   const assignOrderToAgent = useCallback((order) => {
     const currentAgents = agentsRef.current;
@@ -244,6 +400,7 @@ export function useSimulation() {
     const deliveryTime = order.delayed ? randomBetween(18000, 30000) : randomBetween(6000, 14000);
 
     if (order.delayed) {
+      playSFX('orderDelayed');
       const alertMsg = `Delay detected on ${order.id} — ${chosen.name} assigned with extended SLA`;
       const log = createLog('ALERT', alertMsg, 'critical');
       addLog(log);
@@ -334,6 +491,7 @@ export function useSimulation() {
         const victim = pickRandom(activeAgents);
         const idleAgent = currentAgents.find(a => a.status === 'idle' && a.id !== victim.id);
         if (idleAgent) {
+          playSFX('agentStuck');
           setAgents(prev => prev.map(a => {
             if (a.id === victim.id) return { ...a, status: 'stuck', stuckSince: Date.now(), currentAction: 'Route blocked' };
             if (a.id === idleAgent.id) return { ...a, status: 'active', currentOrderId: victim.currentOrderId, currentAction: 'Picking up reassigned order' };
@@ -350,6 +508,7 @@ export function useSimulation() {
             }
           );
         } else {
+          playSFX('agentStuck');
           setAgents(prev => prev.map(a =>
             a.id === victim.id ? { ...a, status: 'stuck', stuckSince: Date.now(), currentAction: 'Route blocked' } : a
           ));
@@ -375,6 +534,7 @@ export function useSimulation() {
         const targetStore = storesRef.current.find(s => s.zone === hotZone);
         if (sourceStore && targetStore) {
           const units = randomBetween(10, 30);
+          playSFX('demandSpike');
           const demandMsg = `DEMAND AGENT: Spike detected in ${hotZone} — transferring ${units} units from ${sourceStore.name}`;
           const log = createLog('DEMAND', demandMsg, 'high');
           addLog(log);
@@ -440,9 +600,8 @@ export function useSimulation() {
     return () => clearInterval(interval);
   }, [addLog, queueLlmReasoning]);
 
-  // Weather cycle — changes every 30s
+  // Weather cycle
   useEffect(() => {
-    // Initial weather prediction
     const fetchInitialPrediction = async () => {
       try {
         const res = await fetch(`${BACKEND_URL}/api/weather-prediction`, {
@@ -473,7 +632,6 @@ export function useSimulation() {
         prediction: prev.prediction,
       }));
 
-      // Fetch new AI prediction
       const fetchPrediction = async () => {
         try {
           const res = await fetch(`${BACKEND_URL}/api/weather-prediction`, {
@@ -491,7 +649,6 @@ export function useSimulation() {
       };
       fetchPrediction();
 
-      // Log weather-driven demand change
       addLog(createLog('DEMAND',
         `DEMAND AGENT: Weather shift — ${newCondition.condition}${eventRoll ? ` + ${eventRoll.event}` : ''}. Adjusting zone predictions.`,
         'medium'
@@ -501,72 +658,22 @@ export function useSimulation() {
     return () => clearInterval(interval);
   }, [addLog]);
 
-  // Orchestrator conflict generation — every 15-20s
+  // Orchestrator conflict generation
   useEffect(() => {
     const interval = setInterval(() => {
-      if (Math.random() < 0.6) return; // 40% chance to generate a conflict
-
+      if (Math.random() < 0.6) return;
       const template = pickRandom(CONFLICT_TEMPLATES);
-      const conflictId = `conflict-${++conflictCounter}-${Date.now()}`;
-
-      const newConflict = {
-        id: conflictId,
-        ...template,
-        timestamp: Date.now(),
-        resolved: false,
-        reasoning: null,
-      };
-
-      setConflicts(prev => [newConflict, ...prev].slice(0, 8));
-
-      addLog(createLog('ALERT',
-        `ORCHESTRATOR: Conflict — ${template.agentA} vs ${template.agentB}: ${template.description}`,
-        'high'
-      ));
-
-      // Resolve after 3-5 seconds with LLM reasoning
-      const resolveDelay = randomBetween(3000, 5000);
-      setTimeout(async () => {
-        // Fetch orchestrator reasoning
-        try {
-          const res = await fetch(`${BACKEND_URL}/api/orchestrator-reasoning`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              agent_a: template.agentA,
-              agent_b: template.agentB,
-              action_a: template.actionA,
-              action_b: template.actionB,
-              context: template.description,
-            }),
-          });
-          const data = await res.json();
-
-          setConflicts(prev => prev.map(c =>
-            c.id === conflictId
-              ? { ...c, resolved: true, reasoning: data.reasoning }
-              : c
-          ));
-
-          addLog(createLog('ROUTING',
-            `ORCHESTRATOR: Resolved ${template.agentA} vs ${template.agentB} — ${template.resolution}`,
-            'high'
-          ));
-        } catch {
-          setConflicts(prev => prev.map(c =>
-            c.id === conflictId ? { ...c, resolved: true } : c
-          ));
-        }
-      }, resolveDelay);
+      triggerConflict(template);
     }, 15000);
 
     return () => clearInterval(interval);
-  }, [addLog]);
+  }, [triggerConflict]);
 
   return {
     orders, agents, stores, logs,
     totalDelivered, totalDelayed, successRate,
     cascadeAlert, cascadeEvent, setCascadeEvent,
     weather, conflicts,
+    demoActive, activateDemoMode,
   };
 }

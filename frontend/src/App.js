@@ -1,5 +1,5 @@
-import { useCallback } from 'react';
-import { Zap } from 'lucide-react';
+import { useCallback, useState } from 'react';
+import { Zap, Play, VolumeX, Volume2 } from 'lucide-react';
 import { useSimulation } from './hooks/useSimulation';
 import DarkStores from './components/DarkStores';
 import AgentStatus from './components/AgentStatus';
@@ -9,6 +9,7 @@ import CascadeAlert from './components/CascadeAlert';
 import CascadeModal from './components/CascadeModal';
 import WeatherPrediction from './components/WeatherPrediction';
 import OrchestratorPanel from './components/OrchestratorPanel';
+import { setMuted, isMuted } from './utils/sounds';
 
 function App() {
   const {
@@ -16,9 +17,17 @@ function App() {
     totalDelivered, totalDelayed, successRate,
     cascadeAlert, cascadeEvent, setCascadeEvent,
     weather, conflicts,
+    demoActive, activateDemoMode,
   } = useSimulation();
 
+  const [soundOn, setSoundOn] = useState(true);
   const closeCascadeModal = useCallback(() => setCascadeEvent(null), [setCascadeEvent]);
+
+  const toggleSound = () => {
+    const next = !soundOn;
+    setSoundOn(next);
+    setMuted(!next);
+  };
 
   return (
     <div className="h-screen flex flex-col overflow-hidden" style={{ backgroundColor: '#0a0a0a', fontFamily: "'Inter', system-ui, sans-serif" }} data-testid="app-container">
@@ -31,13 +40,53 @@ function App() {
             </div>
             <div>
               <h1 className="text-xs font-bold text-white tracking-wide" data-testid="app-title">DarkOps Control Center</h1>
-              <p className="text-[10px] leading-none" style={{ color: '#444' }}>Autonomous Quick-Commerce · v3.0</p>
+              <p className="text-[10px] leading-none" style={{ color: '#444' }}>Autonomous Quick-Commerce · v3.1</p>
             </div>
           </div>
+
           <div className="flex items-center gap-3">
+            {/* Mute toggle */}
+            <button
+              onClick={toggleSound}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-colors hover:bg-white/5"
+              style={{ border: '1px solid #222' }}
+              data-testid="sound-toggle-btn"
+            >
+              {soundOn
+                ? <Volume2 size={12} style={{ color: '#10b981' }} />
+                : <VolumeX size={12} style={{ color: '#555' }} />
+              }
+              <span className="text-[10px] font-medium" style={{ color: soundOn ? '#10b981' : '#555' }}>
+                {soundOn ? 'SFX On' : 'SFX Off'}
+              </span>
+            </button>
+
+            {/* Demo Mode button */}
+            <button
+              onClick={activateDemoMode}
+              disabled={demoActive}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold transition-all"
+              style={{
+                backgroundColor: demoActive ? 'rgba(239,68,68,0.1)' : 'rgba(168,85,247,0.1)',
+                border: `1px solid ${demoActive ? 'rgba(239,68,68,0.3)' : 'rgba(168,85,247,0.3)'}`,
+                color: demoActive ? '#ef4444' : '#a855f7',
+                cursor: demoActive ? 'not-allowed' : 'pointer',
+                opacity: demoActive ? 0.7 : 1,
+              }}
+              data-testid="demo-mode-btn"
+            >
+              <Play size={11} fill={demoActive ? '#ef4444' : '#a855f7'} />
+              <span className="text-[10px]">
+                {demoActive ? 'Demo Running...' : 'Demo Mode'}
+              </span>
+            </button>
+
+            {/* System status */}
             <span className="flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="text-[11px]" style={{ color: '#555' }} data-testid="system-status">System Nominal</span>
+              <span className={`w-1.5 h-1.5 rounded-full ${demoActive ? 'bg-red-400' : 'bg-emerald-400'} animate-pulse`} />
+              <span className="text-[11px]" style={{ color: '#555' }} data-testid="system-status">
+                {demoActive ? 'Demo Active' : 'System Nominal'}
+              </span>
             </span>
           </div>
         </div>
