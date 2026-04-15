@@ -11,6 +11,7 @@ import CascadeModal from './components/CascadeModal';
 import WeatherPrediction from './components/WeatherPrediction';
 import OrchestratorPanel from './components/OrchestratorPanel';
 import { setMuted } from './utils/sounds';
+import AIAgent from './components/AIAgents';
 
 function Dashboard() {
   const { theme, toggleTheme } = useTheme();
