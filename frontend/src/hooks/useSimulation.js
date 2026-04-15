@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { generateOrder, randomBetween, pickRandom } from '../utils/generators';
 
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+
 const INITIAL_STORES = [
   {
     id: 'store-a', name: 'Store Alpha', zone: 'Zone A',
@@ -57,14 +59,29 @@ const CURRENT_ACTIONS = [
 
 let logCounter = 0;
 
-function createLog(type, message, priority) {
+function createLog(type, message, priority, reasoning) {
   return {
     id: `log-${++logCounter}-${Date.now()}`,
     timestamp: Date.now(),
     type,
     message,
     priority,
+    reasoning: reasoning || null,
   };
+}
+
+async function fetchAgentReasoning(agentType, context) {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/agent-reasoning`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent_type: agentType, context }),
+    });
+    const data = await res.json();
+    return data.reasoning;
+  } catch {
+    return null;
+  }
 }
 
 export function useSimulation() {
@@ -75,10 +92,14 @@ export function useSimulation() {
   const [totalDelivered, setTotalDelivered] = useState(0);
   const [totalDelayed, setTotalDelayed] = useState(0);
   const [successRate, setSuccessRate] = useState(93);
+  const [cascadeAlert, setCascadeAlert] = useState({ active: false, failCount: 0 });
+  const [cascadeEvent, setCascadeEvent] = useState(null);
 
   const agentsRef = useRef(agents);
   const ordersRef = useRef(orders);
   const storesRef = useRef(stores);
+  const recentDelaysRef = useRef([]);
+  const llmQueueRef = useRef(Promise.resolve());
 
   useEffect(() => { agentsRef.current = agents; }, [agents]);
   useEffect(() => { ordersRef.current = orders; }, [orders]);
@@ -88,12 +109,62 @@ export function useSimulation() {
     setLogs(prev => [log, ...prev].slice(0, 60));
   }, []);
 
+  // Queue LLM calls to avoid flooding
+  const queueLlmReasoning = useCallback((agentType, context, callback) => {
+    llmQueueRef.current = llmQueueRef.current.then(async () => {
+      const reasoning = await fetchAgentReasoning(agentType, context);
+      if (reasoning) callback(reasoning);
+    });
+  }, []);
+
+  const checkCascade = useCallback((orderId, zone) => {
+    const now = Date.now();
+    recentDelaysRef.current.push({ orderId, zone, time: now });
+    // Keep only delays from last 10 seconds
+    recentDelaysRef.current = recentDelaysRef.current.filter(d => now - d.time < 10000);
+
+    if (recentDelaysRef.current.length >= 2) {
+      const failCount = recentDelaysRef.current.length;
+      const affectedOrders = recentDelaysRef.current.map(d => d.orderId).filter(id => id !== orderId);
+
+      setCascadeAlert({ active: true, failCount });
+
+      // Trigger cascade modal
+      setCascadeEvent({
+        triggerOrder: orderId,
+        affectedOrders: affectedOrders.slice(0, 3),
+        zone,
+        context: `${failCount} order delays within 10s window in ${zone}`,
+      });
+
+      // Add recovery log with LLM reasoning
+      const recoveryMsg = `RECOVERY AGENT: Cascade detected — ${orderId} delay rippling to ${affectedOrders.length} orders in ${zone}. Initiating auto-recovery.`;
+      const log = createLog('ALERT', recoveryMsg, 'critical');
+      addLog(log);
+
+      queueLlmReasoning('recovery',
+        `Cascade failure: ${orderId} delayed in ${zone}, affecting ${affectedOrders.join(', ')}. ${failCount} total failures in 10s.`,
+        (reasoning) => {
+          setLogs(prev => prev.map(l => l.id === log.id ? { ...l, reasoning } : l));
+        }
+      );
+
+      // Auto-resolve after 8 seconds
+      setTimeout(() => {
+        setCascadeAlert({ active: false, failCount: 0 });
+        addLog(createLog('ROUTING', `RECOVERY AGENT: Cascade resolved — all ${failCount} affected orders rerouted successfully`, 'high'));
+        recentDelaysRef.current = [];
+      }, 8000);
+    }
+  }, [addLog, queueLlmReasoning]);
+
   const assignOrderToAgent = useCallback((order) => {
     const currentAgents = agentsRef.current;
     const idleAgents = currentAgents.filter(a => a.status === 'idle');
 
     if (idleAgents.length === 0) {
-      addLog(createLog('ALERT', `No idle agents — Order ${order.id} queued for ${order.zone}`, 'high'));
+      const log = createLog('ALERT', `No idle agents — Order ${order.id} queued for ${order.zone}`, 'high');
+      addLog(log);
       return;
     }
 
@@ -117,9 +188,31 @@ export function useSimulation() {
     const deliveryTime = order.delayed ? randomBetween(18000, 30000) : randomBetween(6000, 14000);
 
     if (order.delayed) {
-      addLog(createLog('ALERT', `Delay detected on ${order.id} — ${chosen.name} assigned with extended SLA`, 'critical'));
+      const alertMsg = `Delay detected on ${order.id} — ${chosen.name} assigned with extended SLA`;
+      const log = createLog('ALERT', alertMsg, 'critical');
+      addLog(log);
+      checkCascade(order.id, order.zone);
+
+      queueLlmReasoning('routing',
+        `Order ${order.id} is delayed in ${order.zone}. Agent ${chosen.name} assigned from ${storeInZone.name}. SLA at risk.`,
+        (reasoning) => {
+          setLogs(prev => prev.map(l => l.id === log.id ? { ...l, reasoning } : l));
+        }
+      );
     } else {
-      addLog(createLog('ROUTING', `${chosen.name} dispatched for ${order.id} from ${storeInZone.name} → ${order.zone}`, 'low'));
+      const routingMsg = `${chosen.name} dispatched for ${order.id} from ${storeInZone.name} → ${order.zone}`;
+      const log = createLog('ROUTING', routingMsg, 'low');
+      addLog(log);
+
+      // Periodic LLM reasoning for regular dispatches to show agents thinking
+      if (Math.random() < 0.25) {
+        queueLlmReasoning('routing',
+          `Dispatching ${chosen.name} from ${storeInZone.name} to ${order.zone} for order ${order.id} (${order.product} x${order.quantity}). Zone load normal.`,
+          (reasoning) => {
+            setLogs(prev => prev.map(l => l.id === log.id ? { ...l, reasoning } : l));
+          }
+        );
+      }
     }
 
     setTimeout(() => {
@@ -145,8 +238,9 @@ export function useSimulation() {
         s.id === storeInZone.id ? { ...s, totalOrders: s.totalOrders + 1 } : s
       ));
     }, deliveryTime);
-  }, [addLog]);
+  }, [addLog, checkCascade, queueLlmReasoning]);
 
+  // Main order generation loop
   useEffect(() => {
     const interval = setInterval(() => {
       const order = generateOrder();
@@ -172,6 +266,7 @@ export function useSimulation() {
     return () => clearInterval(interval);
   }, [assignOrderToAgent]);
 
+  // Agent events loop (stuck, recovery, demand spikes, inventory)
   useEffect(() => {
     const interval = setInterval(() => {
       const currentAgents = agentsRef.current;
@@ -189,7 +284,16 @@ export function useSimulation() {
             if (a.id === idleAgent.id) return { ...a, status: 'active', currentOrderId: victim.currentOrderId, currentAction: 'Picking up reassigned order' };
             return a;
           }));
-          addLog(createLog('ROUTING', `ROUTING AGENT: ${victim.name} stuck — reassigning ${idleAgent.name} to cover order`, 'critical'));
+          const routingMsg = `ROUTING AGENT: ${victim.name} stuck — reassigning ${idleAgent.name} to cover order`;
+          const log = createLog('ROUTING', routingMsg, 'critical');
+          addLog(log);
+
+          queueLlmReasoning('routing',
+            `Agent ${victim.name} is stuck in ${victim.zone} with route blocked. Reassigning ${idleAgent.name} from ${idleAgent.zone} to cover order ${victim.currentOrderId}.`,
+            (reasoning) => {
+              setLogs(prev => prev.map(l => l.id === log.id ? { ...l, reasoning } : l));
+            }
+          );
         } else {
           setAgents(prev => prev.map(a =>
             a.id === victim.id ? { ...a, status: 'stuck', stuckSince: Date.now(), currentAction: 'Route blocked' } : a
@@ -216,10 +320,17 @@ export function useSimulation() {
         const targetStore = storesRef.current.find(s => s.zone === hotZone);
         if (sourceStore && targetStore) {
           const units = randomBetween(10, 30);
-          addLog(createLog('DEMAND',
-            `DEMAND AGENT: Spike detected in ${hotZone} — transferring ${units} units from ${sourceStore.name}`,
-            'high'
-          ));
+          const demandMsg = `DEMAND AGENT: Spike detected in ${hotZone} — transferring ${units} units from ${sourceStore.name}`;
+          const log = createLog('DEMAND', demandMsg, 'high');
+          addLog(log);
+
+          queueLlmReasoning('demand',
+            `Demand spike in ${hotZone}. Transferring ${units} units from ${sourceStore.name} to ${targetStore.name}. Source utilization: ${sourceStore.utilization}%, Target utilization: ${targetStore.utilization}%.`,
+            (reasoning) => {
+              setLogs(prev => prev.map(l => l.id === log.id ? { ...l, reasoning } : l));
+            }
+          );
+
           setStores(prev => prev.map(s => {
             if (s.id === targetStore.id) {
               return {
@@ -235,7 +346,7 @@ export function useSimulation() {
         }
       }
 
-      if (roll > 0.85) {
+      if (roll > 0.8) {
         const lowStoreProduct = (() => {
           for (const store of storesRef.current) {
             const lowProduct = store.products.find(p => p.stock < 25);
@@ -244,10 +355,17 @@ export function useSimulation() {
           return null;
         })();
         if (lowStoreProduct) {
-          addLog(createLog('INVENTORY',
-            `INVENTORY AGENT: Low stock alert — ${lowStoreProduct.product.name} at ${lowStoreProduct.store.name} (${lowStoreProduct.product.stock} units) — reorder triggered`,
-            'high'
-          ));
+          const invMsg = `INVENTORY AGENT: Low stock alert — ${lowStoreProduct.product.name} at ${lowStoreProduct.store.name} (${lowStoreProduct.product.stock} units) — reorder triggered`;
+          const log = createLog('INVENTORY', invMsg, 'high');
+          addLog(log);
+
+          queueLlmReasoning('inventory',
+            `${lowStoreProduct.product.name} stock at ${lowStoreProduct.store.name} dropped to ${lowStoreProduct.product.stock}/${lowStoreProduct.product.maxStock} units. Zone: ${lowStoreProduct.store.zone}.`,
+            (reasoning) => {
+              setLogs(prev => prev.map(l => l.id === log.id ? { ...l, reasoning } : l));
+            }
+          );
+
           setStores(prev => prev.map(s =>
             s.id === lowStoreProduct.store.id
               ? {
@@ -265,7 +383,11 @@ export function useSimulation() {
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [addLog]);
+  }, [addLog, queueLlmReasoning]);
 
-  return { orders, agents, stores, logs, totalDelivered, totalDelayed, successRate };
+  return {
+    orders, agents, stores, logs,
+    totalDelivered, totalDelayed, successRate,
+    cascadeAlert, cascadeEvent, setCascadeEvent,
+  };
 }

@@ -1,15 +1,25 @@
+import { useCallback } from 'react';
 import { Zap } from 'lucide-react';
 import { useSimulation } from './hooks/useSimulation';
 import DarkStores from './components/DarkStores';
 import AgentStatus from './components/AgentStatus';
 import DecisionLog from './components/DecisionLog';
 import StatsBar from './components/StatsBar';
+import CascadeAlert from './components/CascadeAlert';
+import CascadeModal from './components/CascadeModal';
 
 function App() {
-  const { agents, stores, logs, totalDelivered, totalDelayed, successRate } = useSimulation();
+  const {
+    agents, stores, logs,
+    totalDelivered, totalDelayed, successRate,
+    cascadeAlert, cascadeEvent, setCascadeEvent,
+  } = useSimulation();
+
+  const closeCascadeModal = useCallback(() => setCascadeEvent(null), [setCascadeEvent]);
 
   return (
     <div className="h-screen flex flex-col overflow-hidden" style={{ backgroundColor: '#0a0a0a', fontFamily: "'Inter', system-ui, sans-serif" }} data-testid="app-container">
+      {/* Header */}
       <header className="flex-shrink-0 border-b px-6 py-3" style={{ borderColor: '#1a1a1a' }} data-testid="app-header">
         <div className="max-w-[1400px] mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -30,7 +40,14 @@ function App() {
         </div>
       </header>
 
-      <div className="flex-1 flex flex-col max-w-[1400px] mx-auto w-full px-6 py-4 gap-4 min-h-0">
+      {/* Main content */}
+      <div className="flex-1 flex flex-col max-w-[1400px] mx-auto w-full px-6 py-4 gap-3 min-h-0">
+        {/* Cascade Alert Banner */}
+        <div className="flex-shrink-0">
+          <CascadeAlert active={cascadeAlert.active} failCount={cascadeAlert.failCount} />
+        </div>
+
+        {/* Stats bar */}
         <div className="flex-shrink-0">
           <StatsBar
             totalDelivered={totalDelivered}
@@ -40,6 +57,7 @@ function App() {
           />
         </div>
 
+        {/* 3-column grid */}
         <div className="flex-1 grid grid-cols-3 gap-4 min-h-0 overflow-hidden" data-testid="main-grid">
           <div className="flex flex-col min-h-0 overflow-y-auto rounded-xl border p-4" style={{ backgroundColor: '#111', borderColor: '#1e1e1e' }}>
             <DarkStores stores={stores} />
@@ -54,6 +72,18 @@ function App() {
           </div>
         </div>
       </div>
+
+      {/* SyncTech Footer */}
+      <footer className="flex-shrink-0 py-2 px-6" style={{ borderTop: '1px solid #1a1a1a' }} data-testid="synctech-footer">
+        <div className="max-w-[1400px] mx-auto flex items-center justify-center">
+          <span className="text-[10px] tracking-wide" style={{ color: '#333' }}>
+            Powered by <span className="font-semibold" style={{ color: '#555' }}>SyncTech FlowOps</span>
+          </span>
+        </div>
+      </footer>
+
+      {/* Cascade Modal Overlay */}
+      <CascadeModal cascadeEvent={cascadeEvent} onClose={closeCascadeModal} />
     </div>
   );
 }
